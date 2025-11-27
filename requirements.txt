@@ -1,0 +1,10 @@
+mediapipe
+opencv-python
+fastapi
+uvicorn
+python-multipart
+gradio
+streamlit
+numpy
+msvc-runtime; platform_system == "Windows"
+requests
