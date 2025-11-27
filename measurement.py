@@ -2,11 +2,13 @@ import cv2
 import mediapipe as mp
 import math
 import numpy as np
+import base64
 
 class BodyMeasurement:
     def __init__(self):
         self.mp_pose = mp.solutions.pose
         self.pose = self.mp_pose.Pose(static_image_mode=True, min_detection_confidence=0.5)
+        self.mp_drawing = mp.solutions.drawing_utils
 
     def calculate_distance(self, p1, p2):
         return math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2)
@@ -33,7 +35,6 @@ class BodyMeasurement:
         landmarks = results.pose_landmarks.landmark
 
         # Get key landmarks
-        # MediaPipe Pose Landmarks: https://developers.google.com/mediapipe/solutions/vision/pose
         nose = landmarks[self.mp_pose.PoseLandmark.NOSE]
         left_heel = landmarks[self.mp_pose.PoseLandmark.LEFT_HEEL]
         right_heel = landmarks[self.mp_pose.PoseLandmark.RIGHT_HEEL]
@@ -47,18 +48,7 @@ class BodyMeasurement:
         left_wrist = landmarks[self.mp_pose.PoseLandmark.LEFT_WRIST]
         right_wrist = landmarks[self.mp_pose.PoseLandmark.RIGHT_WRIST]
 
-        # Calculate Pixel Height (approximate from nose to average heel position)
-        # Note: This is a rough approximation. A full body bounding box would be better, 
-        # but using landmarks is a good start.
-        # We'll use the Y-coordinate difference.
-        
-        avg_heel_y = (left_heel.y + right_heel.y) / 2
-        # Top of head is roughly above the nose. 
-        # Let's assume the distance from nose to top of head is roughly 1/7th of the head-to-chin distance?
-        # For simplicity, let's use the full vertical span of landmarks or just Nose to Heel and add a small buffer.
-        # A better heuristic: Eye to Heel is often used, or just bounding box height.
-        
-        # Let's use the bounding box of the detected pose for "height" in pixels
+        # Calculate Pixel Height (approximate)
         y_coords = [lm.y for lm in landmarks]
         min_y = min(y_coords)
         max_y = max(y_coords)
@@ -71,11 +61,12 @@ class BodyMeasurement:
         # Scale Factor: cm per pixel
         scale_factor = user_height_cm / pixel_height
 
+        # Helper to get pixel coordinates
+        def to_pixel(lm):
+            return (int(lm.x * image_width), int(lm.y * image_height))
+
         # Calculate Widths (Horizontal distance)
-        # We use x coordinates * image_width
-        
         def get_dist_cm(p1, p2):
-            # Euclidean distance in pixels
             dist_px = math.sqrt(((p1.x - p2.x) * image_width)**2 + ((p1.y - p2.y) * image_height)**2)
             return dist_px * scale_factor
 
@@ -87,10 +78,33 @@ class BodyMeasurement:
         right_arm = get_dist_cm(right_shoulder, right_wrist)
         avg_arm = (left_arm + right_arm) / 2
 
+        # --- VISUALIZATION ---
+        # Draw landmarks
+        self.mp_drawing.draw_landmarks(
+            image, results.pose_landmarks, self.mp_pose.POSE_CONNECTIONS)
+
+        # Draw measurement lines
+        def draw_measurement(p1, p2, value, label):
+            pt1 = to_pixel(p1)
+            pt2 = to_pixel(p2)
+            cv2.line(image, pt1, pt2, (0, 255, 0), 2)
+            mid_point = ((pt1[0] + pt2[0]) // 2, (pt1[1] + pt2[1]) // 2)
+            cv2.putText(image, f"{label}: {value}cm", mid_point, 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+        draw_measurement(left_shoulder, right_shoulder, round(shoulder_width, 1), "Shoulder")
+        draw_measurement(left_hip, right_hip, round(hip_width, 1), "Hip")
+        draw_measurement(left_shoulder, left_wrist, round(left_arm, 1), "L. Arm")
+        
+        # Encode image to base64
+        _, buffer = cv2.imencode('.jpg', image)
+        img_base64 = base64.b64encode(buffer).decode('utf-8')
+
         return {
             "height_cm": user_height_cm,
             "shoulder_width_cm": round(shoulder_width, 2),
             "hip_width_cm": round(hip_width, 2),
             "arm_length_cm": round(avg_arm, 2),
-            "scale_factor": scale_factor
+            "scale_factor": scale_factor,
+            "image_base64": img_base64
         }

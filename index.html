@@ -48,6 +48,30 @@
             gap: 20px;
         }
 
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+            justify-content: center;
+        }
+
+        .tab-btn {
+            background-color: var(--card-bg);
+            border: 1px solid #334155;
+            color: #94a3b8;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .tab-btn.active {
+            background-color: var(--primary-color);
+            color: white;
+            border-color: var(--primary-color);
+        }
+
         .camera-container {
             position: relative;
             width: 100%;
@@ -57,11 +81,44 @@
             overflow: hidden;
             box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
             background-color: #000;
+            min-height: 300px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
-        video, canvas {
+        video, canvas, #resultImage, #uploadedImagePreview {
             width: 100%;
             display: block;
+        }
+        
+        #resultImage, #uploadedImagePreview {
+            display: none;
+        }
+
+        /* Guide Overlay */
+        .guide-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 80%;
+            height: 80%;
+            border: 2px dashed rgba(255, 255, 255, 0.5);
+            border-radius: 50px;
+            pointer-events: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .guide-text {
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 1.2rem;
+            text-align: center;
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-radius: 8px;
         }
 
         .controls {
@@ -88,13 +145,17 @@
             color: #94a3b8;
         }
 
-        input[type="number"] {
+        input[type="number"], input[type="file"] {
             padding: 10px;
             border-radius: 8px;
             border: 1px solid #475569;
             background-color: #334155;
             color: white;
             font-size: 1rem;
+        }
+        
+        input[type="file"] {
+            cursor: pointer;
         }
 
         button {
@@ -110,6 +171,14 @@
 
         button:hover {
             background-color: #4f46e5;
+        }
+        
+        button.secondary {
+            background-color: #475569;
+        }
+        
+        button.secondary:hover {
+            background-color: #64748b;
         }
 
         #results {
@@ -136,6 +205,12 @@
             text-align: center;
             color: #94a3b8;
         }
+        
+        /* Upload Mode Styles */
+        .upload-placeholder {
+            color: #94a3b8;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
@@ -144,9 +219,24 @@
     </header>
 
     <main>
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('camera')">Camera</button>
+            <button class="tab-btn" onclick="switchTab('upload')">Upload Photo</button>
+        </div>
+
         <div class="camera-container">
             <video id="video" autoplay playsinline></video>
+            <img id="uploadedImagePreview" alt="Upload Preview">
+            <img id="resultImage" alt="Processed Image">
             <canvas id="canvas" style="display:none;"></canvas>
+            
+            <div id="guideOverlay" class="guide-overlay">
+                <div class="guide-text">Stand here<br>Full body visible</div>
+            </div>
+            
+            <div id="uploadPlaceholder" class="upload-placeholder" style="display:none;">
+                <p>No image selected</p>
+            </div>
         </div>
 
         <div class="controls">
@@ -154,7 +244,14 @@
                 <label for="height">Your Height (cm)</label>
                 <input type="number" id="height" placeholder="e.g., 175" value="170">
             </div>
+            
+            <div id="fileInputGroup" class="input-group" style="display:none;">
+                <label for="fileInput">Select Photo</label>
+                <input type="file" id="fileInput" accept="image/*">
+            </div>
+
             <button id="captureBtn">Capture & Measure</button>
+            <button id="resetBtn" class="secondary" style="display:none;">Start Over</button>
         </div>
 
         <div id="loading" class="loading">Processing image...</div>
@@ -179,23 +276,97 @@
     <script>
         const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
+        const resultImage = document.getElementById('resultImage');
+        const uploadedImagePreview = document.getElementById('uploadedImagePreview');
+        const guideOverlay = document.getElementById('guideOverlay');
+        const uploadPlaceholder = document.getElementById('uploadPlaceholder');
+        
         const captureBtn = document.getElementById('captureBtn');
+        const resetBtn = document.getElementById('resetBtn');
         const heightInput = document.getElementById('height');
+        const fileInput = document.getElementById('fileInput');
+        const fileInputGroup = document.getElementById('fileInputGroup');
+        
         const resultsDiv = document.getElementById('results');
         const loadingDiv = document.getElementById('loading');
+        
+        let currentMode = 'camera'; // 'camera' or 'upload'
+        let stream = null;
+
+        // Tab Switching
+        window.switchTab = function(mode) {
+            currentMode = mode;
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+            
+            resetUI();
+
+            if (mode === 'camera') {
+                startCamera();
+                video.style.display = 'block';
+                guideOverlay.style.display = 'flex';
+                uploadPlaceholder.style.display = 'none';
+                uploadedImagePreview.style.display = 'none';
+                fileInputGroup.style.display = 'none';
+                captureBtn.textContent = 'Capture & Measure';
+            } else {
+                stopCamera();
+                video.style.display = 'none';
+                guideOverlay.style.display = 'none';
+                uploadPlaceholder.style.display = 'block';
+                uploadedImagePreview.style.display = 'none';
+                fileInputGroup.style.display = 'flex';
+                captureBtn.textContent = 'Measure Uploaded Photo';
+            }
+        };
 
         // Access Camera
         async function startCamera() {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                stream = await navigator.mediaDevices.getUserMedia({ video: true });
                 video.srcObject = stream;
             } catch (err) {
                 console.error("Error accessing camera:", err);
-                alert("Could not access camera. Please ensure you have given permission.");
+                alert("Could not access camera.");
+            }
+        }
+        
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
             }
         }
 
+        // Initial Start
         startCamera();
+
+        // File Input Handling
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    uploadedImagePreview.src = e.target.result;
+                    uploadedImagePreview.style.display = 'block';
+                    uploadPlaceholder.style.display = 'none';
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        function resetUI() {
+            resultImage.style.display = 'none';
+            resultsDiv.style.display = 'none';
+            captureBtn.style.display = 'block';
+            resetBtn.style.display = 'none';
+            loadingDiv.style.display = 'none';
+            
+            // Clear results
+            document.getElementById('shoulderWidth').textContent = '-';
+            document.getElementById('hipWidth').textContent = '-';
+            document.getElementById('armLength').textContent = '-';
+        }
 
         captureBtn.addEventListener('click', async () => {
             const height = heightInput.value;
@@ -204,47 +375,95 @@
                 return;
             }
 
-            // Capture frame
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            canvas.getContext('2d').drawImage(video, 0, 0);
+            const formData = new FormData();
+            formData.append('height', height);
 
-            // Convert to blob
-            canvas.toBlob(async (blob) => {
-                const formData = new FormData();
-                formData.append('image', blob, 'capture.jpg');
-                formData.append('height', height);
-
-                // Show loading
-                loadingDiv.style.display = 'block';
-                resultsDiv.style.display = 'none';
-
-                try {
-                    const response = await fetch('/measure', {
-                        method: 'POST',
-                        body: formData
-                    });
-                    const data = await response.json();
-
-                    loadingDiv.style.display = 'none';
-                    
-                    if (data.error) {
-                        alert("Error: " + data.error);
-                        return;
-                    }
-
-                    // Display results
-                    document.getElementById('shoulderWidth').textContent = data.shoulder_width_cm + ' cm';
-                    document.getElementById('hipWidth').textContent = data.hip_width_cm + ' cm';
-                    document.getElementById('armLength').textContent = data.arm_length_cm + ' cm';
-                    resultsDiv.style.display = 'block';
-
-                } catch (err) {
-                    console.error("Error:", err);
-                    loadingDiv.style.display = 'none';
-                    alert("An error occurred while processing.");
+            if (currentMode === 'camera') {
+                // Capture from video
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                canvas.getContext('2d').drawImage(video, 0, 0);
+                
+                await new Promise(resolve => canvas.toBlob(blob => {
+                    formData.append('image', blob, 'capture.jpg');
+                    resolve();
+                }, 'image/jpeg'));
+                
+                video.pause();
+            } else {
+                // Use uploaded file
+                const file = fileInput.files[0];
+                if (!file) {
+                    alert("Please select a photo first.");
+                    return;
                 }
-            }, 'image/jpeg');
+                formData.append('image', file);
+            }
+
+            // Show loading
+            loadingDiv.style.display = 'block';
+            resultsDiv.style.display = 'none';
+            captureBtn.style.display = 'none';
+
+            try {
+                const response = await fetch('/measure', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+
+                loadingDiv.style.display = 'none';
+                
+                if (data.error) {
+                    alert("Error: " + data.error);
+                    if (currentMode === 'camera') video.play();
+                    captureBtn.style.display = 'block';
+                    return;
+                }
+
+                // Display results
+                document.getElementById('shoulderWidth').textContent = data.shoulder_width_cm + ' cm';
+                document.getElementById('hipWidth').textContent = data.hip_width_cm + ' cm';
+                document.getElementById('armLength').textContent = data.arm_length_cm + ' cm';
+                resultsDiv.style.display = 'block';
+                
+                // Display processed image
+                if (data.image_base64) {
+                    resultImage.src = 'data:image/jpeg;base64,' + data.image_base64;
+                    
+                    // Hide other previews
+                    video.style.display = 'none';
+                    uploadedImagePreview.style.display = 'none';
+                    guideOverlay.style.display = 'none';
+                    uploadPlaceholder.style.display = 'none';
+                    
+                    resultImage.style.display = 'block';
+                    resetBtn.style.display = 'block';
+                }
+
+            } catch (err) {
+                console.error("Error:", err);
+                loadingDiv.style.display = 'none';
+                captureBtn.style.display = 'block';
+                alert("An error occurred while processing.");
+                if (currentMode === 'camera') video.play();
+            }
+        });
+        
+        resetBtn.addEventListener('click', () => {
+            resetUI();
+            if (currentMode === 'camera') {
+                video.style.display = 'block';
+                guideOverlay.style.display = 'flex';
+                video.play();
+            } else {
+                uploadedImagePreview.style.display = 'block';
+                // If no file selected yet, show placeholder
+                if (!fileInput.files[0]) {
+                    uploadedImagePreview.style.display = 'none';
+                    uploadPlaceholder.style.display = 'block';
+                }
+            }
         });
     </script>
 </body>
